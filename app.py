@@ -1,123 +1,91 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Tue May 13 23:29:30 2025
-
-@author: HARSHIT NARAIN
-"""
-
-# streamlit_app.py
-import streamlit as st
-import tempfile
+from flask import Flask, request, jsonify, send_from_directory, render_template_string
+import os
+from werkzeug.utils import secure_filename
 from predict import predict_image, predict_video
+from PIL import Image
+import cv2
 
-# --- Page Config ---
-st.set_page_config(page_title="Deepfake Detector", layout="centered")
+app = Flask(__name__)
+UPLOAD_FOLDER = 'uploads'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# --- Session State for Login ---
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-if "user_email" not in st.session_state:
-    st.session_state.user_email = ""
+# Load the frontend HTML
+with open("html_frontend.html", "r", encoding="utf-8") as f:
+    FRONTEND_HTML = f.read()
 
-# --- Dummy User Store ---
-users = {
-    "admin@gmail.com": "admin123",
-    "user@gmail.com": "user123"
-}
+@app.route('/')
+def home():
+    return render_template_string(FRONTEND_HTML)
 
-# --- Background Styling ---
-st.markdown("""
-    <style>
-    body {
-        background: url('https://images.unsplash.com/photo-1535223289827-42f1e9919769?auto=format&fit=crop&w=1350&q=80');
-        background-size: cover;
-        background-position: center;
-    }
-    .main {
-        background-color: rgba(0, 0, 0, 0.6);
-        padding: 3rem;
-        border-radius: 15px;
-        backdrop-filter: blur(10px);
-        color: white;
-    }
-    input, select, button {
-        border-radius: 8px !important;
-    }
-    </style>
-""", unsafe_allow_html=True)
+@app.route('/api/health')
+def health():
+    return jsonify({'status': 'ok', 'model_loaded': True})
 
-# --- Login Form ---
-def login():
-    st.markdown("<h2 style='color:white;'>Login to Deepfake Detector</h2>", unsafe_allow_html=True)
-    with st.form("login_form"):
-        email = st.text_input("Email")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Log In")
-        if submitted:
-            if email in users and users[email] == password:
-                st.session_state.authenticated = True
-                st.session_state.user_email = email
-                st.success("Login successful!")
-            else:
-                st.error("Invalid credentials")
+@app.route('/api/detect', methods=['POST'])
+def detect_file():
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'error': 'No file part'})
 
-# --- Signup Form ---
-def signup():
-    st.markdown("<h2 style='color:white;'>Create Account</h2>", unsafe_allow_html=True)
-    with st.form("signup_form"):
-        email = st.text_input("Email")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Sign Up")
-        if submitted:
-            if email in users:
-                st.error("User already exists")
-            else:
-                users[email] = password
-                st.success("Account created. Please log in.")
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'success': False, 'error': 'No selected file'})
 
-# --- Deepfake Detection Interface ---
-def main_interface():
-    st.markdown("<h2 style='color:white;'>Deepfake Detection</h2>", unsafe_allow_html=True)
-    mode = st.radio("Select Mode", ["Image", "Video"])
-    uploaded = st.file_uploader("Upload File", type=["jpg", "jpeg", "png", "mp4"])
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    file.save(filepath)
 
-    if uploaded:
-        tfile = tempfile.NamedTemporaryFile(delete=False)
-        tfile.write(uploaded.read())
-        filepath = tfile.name
+    filetype = file.content_type  # e.g. image/png or video/mp4
 
-        if mode == "Image":
-            st.image(filepath, caption="Uploaded Image", use_column_width=True)
-            st.write("🔍 Detecting...")
-            result = predict_image(filepath)
+    try:
+        if filetype.startswith('image'):
+            result_text = predict_image(filepath)
+        elif filetype.startswith('video'):
+            result_text = predict_video(filepath)
         else:
-            st.video(filepath)
-            st.write("🔍 Detecting...")
-            result = predict_video(filepath)
+            return jsonify({'success': False, 'error': 'Unsupported file type'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Prediction error: {str(e)}'})
 
-        st.success(result)
+    # Parse result text like: "🟢 Real (87.52% confidence)"
+    try:
+        label = "Real" if "🟢" in result_text else "Deepfake"
+        confidence = float(result_text.split('(')[1].split('%')[0]) / 100
+    except:
+        label = "Unknown"
+        confidence = 0.0
 
-# --- Authenticated User View ---
-def logged_in_view():
-    st.markdown(f"<h3 style='color:white;'>Welcome, {st.session_state.user_email}</h3>", unsafe_allow_html=True)
-    main_interface()
-    if st.button("Logout"):
-        st.session_state.authenticated = False
-        st.session_state.user_email = ""
-        st.experimental_rerun()
+    # Calculate file size and dimensions
+    file_size = os.path.getsize(filepath)
+    image_dims = "-"
+    if filetype.startswith("image"):
+        try:
+            with Image.open(filepath) as img:
+                image_dims = f"{img.width}x{img.height}"
+        except:
+            image_dims = "?x?"
+    elif filetype.startswith("video"):
+        cap = cv2.VideoCapture(filepath)
+        if cap.isOpened():
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            image_dims = f"{w}x{h}"
+        cap.release()
 
-# --- Layout Switch ---
-st.markdown("<div class='main'>", unsafe_allow_html=True)
+    return jsonify({
+        'success': True,
+        'label': label,
+        'confidence': confidence,
+        'confidence_percentage': f"{confidence * 100:.2f}%",
+        'real_probability': confidence if label == 'Real' else 1 - confidence,
+        'fake_probability': 1 - confidence if label == 'Real' else confidence,
+        'file_size': file_size,
+        'image_dimensions': image_dims,
+    })
 
-menu = st.sidebar.radio("Navigation", ["Login", "Sign Up", "Try Without Login"])
+@app.route('/uploads/<filename>')
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
-if st.session_state.authenticated:
-    logged_in_view()
-elif menu == "Login":
-    login()
-elif menu == "Sign Up":
-    signup()
-elif menu == "Try Without Login":
-    main_interface()
-
-st.markdown("</div>", unsafe_allow_html=True)
+if __name__ == '__main__':
+    app.run(debug=True)
