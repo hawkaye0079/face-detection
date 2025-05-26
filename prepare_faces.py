@@ -1,42 +1,40 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Wed May 14 00:40:24 2025
-
-@author: HARSHIT NARAIN
-"""
-
 import os
 import cv2
-from utils.preprocess import extract_frames, detect_faces
+from mtcnn import MTCNN
+from utils.preprocess import extract_frames
+import numpy as np
 
-input_dir = "data/original_sequences/youtube/raw/videos"
-output_dir = "data/faces"
-os.makedirs(output_dir, exist_ok=True)
+real_path = 'data/original_sequences/youtube/raw/videos'
+fake_path = 'data/manipulated_sequences/Face2Face/raw/videos'
+face_output_dir = 'data/faces_grouped'
+os.makedirs(face_output_dir, exist_ok=True)
 
-for filename in os.listdir(input_dir):
-    if filename.endswith('.mp4'):
-        video_path = os.path.join(input_dir, filename)
-        video_name = filename.split('.')[0]
-        print(f"Processing: {video_name}")
+detector = MTCNN()
 
+video_id = 0
+for label, path in enumerate([real_path, fake_path]):
+    label_str = 'real' if label == 0 else 'fake'
+    for video_file in os.listdir(path):
+        if not video_file.endswith('.mp4'):
+            continue
+        video_path = os.path.join(path, video_file)
         frames = extract_frames(video_path, None, max_frames=30)
-        faces = detect_faces(frames)
+        faces = []
+        for frame in frames:
+            result = detector.detect_faces(frame)
+            if result:
+                x, y, w, h = result[0]['box']
+                face = frame[y:y+h, x:x+w]
+                face = cv2.resize(face, (224, 224))
+                faces.append(face)
+        if len(faces) >= 10:
+            folder_name = f"{label_str}_{video_id}"
+            folder_path = os.path.join(face_output_dir, folder_name)
+            os.makedirs(folder_path, exist_ok=True)
+            for i in range(10):
+                filename = f"{i}.jpg"
+                filepath = os.path.join(folder_path, filename)
+                cv2.imwrite(filepath, faces[i])
+            video_id += 1
 
-        # Save faces as images
-        for i, face in enumerate(faces):
-            out_path = os.path.join(output_dir, f"{video_name}_{i}.jpg")
-            cv2.imwrite(out_path, face)
-# Add this at the bottom to handle both real and fake
-fake_input_dir = "data/manipulated_sequences/Face2Face/raw/videos"
-for filename in os.listdir(fake_input_dir):
-    if filename.endswith('.mp4'):
-        video_path = os.path.join(fake_input_dir, filename)
-        video_name = "fake_" + filename.split('.')[0]
-        print(f"Processing: {video_name}")
-
-        frames = extract_frames(video_path, None, max_frames=30)
-        faces = detect_faces(frames)
-
-        for i, face in enumerate(faces):
-            out_path = os.path.join(output_dir, f"{video_name}_{i}.jpg")
-            cv2.imwrite(out_path, face)
+print("✅ Face extraction complete. Saved to data/faces_grouped/")
