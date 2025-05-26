@@ -1,53 +1,49 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Wed May 14 00:40:40 2025
-
-@author: HARSHIT NARAIN
-"""
-
 import os
 import numpy as np
-from utils.feature_extractor import extract_features
-from tensorflow.keras.preprocessing import image
+from tensorflow.keras.applications.resnet50 import ResNet50, preprocess_input
+from tensorflow.keras.preprocessing.image import load_img, img_to_array
 
-face_dir = "data/faces"
-video_features = []
-video_labels = []
+model = ResNet50(weights='imagenet', include_top=False, pooling='avg')
+input_path = 'data/faces_grouped'  # ✅ Ensure this matches your extracted face folders
 
-# Group images by video ID
-videos = {}
-for fname in os.listdir(face_dir):
-    if fname.endswith('.jpg'):
-        video_id = '_'.join(fname.split('_')[:1])  # only first part (e.g., 183)
-        videos.setdefault(video_id, []).append(os.path.join(face_dir, fname))
+X, y = [], []
 
-for vid, paths in videos.items():
-    paths = sorted(paths)[:10]  # limit to first 10 frames
-    if len(paths) < 5:
-        print(f"Skipping {vid}: only {len(paths)} frames")
+for folder in sorted(os.listdir(input_path)):
+    folder_path = os.path.join(input_path, folder)
+    if not os.path.isdir(folder_path):
         continue
 
-    # Load and resize images
-    faces = [image.load_img(p, target_size=(224, 224)) for p in paths]
-    features = extract_features(faces)  # (<=10, 2048)
+    label = 0 if 'fake' in folder.lower() else 1
+    files = sorted(os.listdir(folder_path))[:10]
+    if len(files) < 10:
+        print(f"Skipping {folder}: not enough frames")
+        continue
 
-    # Pad with zeros if less than 10
-    if features.shape[0] < 10:
-        pad_len = 10 - features.shape[0]
-        padding = np.zeros((pad_len, 2048))
-        features = np.vstack([features, padding])
+    sequence = []
+    for fname in files:
+        img_path = os.path.join(folder_path, fname)
+        img = load_img(img_path, target_size=(224, 224))
+        x = img_to_array(img)
+        x = preprocess_input(x)
+        sequence.append(x)
 
-    video_features.append(features)
+    X.append(sequence)
+    y.append(label)
 
-    # Label: 1 = fake, 0 = real
-    label = 1 if 'fake_' in vid else 0
-    video_labels.append(label)
+if len(X) == 0:
+    print("❌ No valid sequences found. Check your data/faces_grouped folder structure and frame counts.")
+    exit()
 
-# Save dataset
-X = np.array(video_features)
-y = np.array(video_labels)
-np.save('data/X.npy', X)
+X = np.array(X)  # (N, 10, 224, 224, 3)
+y = np.array(y)
+
+features = []
+for i, seq in enumerate(X):
+    print(f"Extracting features for video {i+1}/{len(X)}")
+    preds = model.predict(seq, verbose=0)  # shape (10, 2048)
+    features.append(preds)
+
+features = np.array(features)  # (N, 10, 2048)
+np.save('data/X.npy', features)
 np.save('data/y.npy', y)
-
-print(f"✅ Saved X.npy with shape {X.shape}")
-print(f"✅ Saved y.npy with shape {y.shape}")
+print("✅ Feature extraction complete. Saved to data/X.npy and data/y.npy")
