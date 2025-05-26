@@ -1,27 +1,24 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Tue May 13 23:28:52 2025
+import os
+import subprocess
 
-@author: HARSHIT NARAIN
-"""
+# Ensure required directories exist
+os.makedirs("data/faces", exist_ok=True)
+os.makedirs("data/features", exist_ok=True)
+os.makedirs("model", exist_ok=True)
 
-import numpy as np
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
-from tensorflow.keras.callbacks import ModelCheckpoint
+steps = [
+    ("Training image-based deepfake classifier...","train_image_model.py")
+    ("Extracting faces from videos...", "prepare_faces.py"),
+    ("Extracting features from faces...", "prepare_features.py"),
+    ("Splitting data and training LSTM model...", "split_and_train_lstm.py")
+]
 
-# Load your dataset: sequences of features
-X = np.load('data/X.npy')  # shape: (num_samples, timesteps, 2048)
-y = np.load('data/y.npy')  # shape: (num_samples,)
-
-model = Sequential([
-    LSTM(64, return_sequences=False, input_shape=(X.shape[1], X.shape[2])),
-    Dense(1, activation='sigmoid')
-])
-
-model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-model.summary()
-
-checkpoint = ModelCheckpoint('model/lstm_model.h5', save_best_only=True, monitor='val_accuracy', mode='max')
-
-model.fit(X, y, epochs=10, batch_size=8, validation_split=0.2, callbacks=[checkpoint])
+for message, script in steps:
+    print("\n===", message)
+    ret = subprocess.call(["python", script])
+    if ret != 0:
+        print(f"❌ Failed: {script}")
+        break
+else:
+    print("\n✅ Training pipeline completed successfully.")
+    print("Saved model: model/lstm_model_augmented.h5")
